@@ -7,34 +7,44 @@ from typing import List
 
 from git import Repo
 
+from ..git_forensics import default_branch_name, iter_reflog_events, is_ancestor
 from ..models import Severity, UnconformityEvent, UnconformityType
 
 
 def detect_angular(repo: Repo) -> List[UnconformityEvent]:
     events: List[UnconformityEvent] = []
-    head_ref = repo.active_branch.name if not repo.head.is_detached else "HEAD"
-    reflog_lines = []
-    try:
-        reflog_lines = repo.git.reflog(head_ref).splitlines()
-    except Exception:
-        reflog_lines = []
-    shas = []
-    for line in reflog_lines:
-        parts = line.split()
-        if parts:
-            shas.append(parts[0])
-    if len(set(shas)) > 1:
+    branch = default_branch_name(repo)
+    branch_refs = [repo.head.reference] if not repo.head.is_detached else []
+    branch_refs.extend(repo.heads)
+    for event in iter_reflog_events(repo):
+        if branch and not event.refname.endswith(f"/{branch}"):
+            continue
+        if not event.oldhexsha or not event.newhexsha:
+            continue
+        if event.oldhexsha == event.newhexsha:
+            continue
+        if is_ancestor(repo, event.oldhexsha, event.newhexsha):
+            continue
+        severity = (
+            Severity.CRITICAL
+            if branch in {"main", "master", "trunk"}
+            else Severity.HIGH
+        )
         events.append(
             UnconformityEvent(
                 type=UnconformityType.ANGULAR,
-                severity=Severity.HIGH
-                if head_ref != "main" and head_ref != "master"
-                else Severity.CRITICAL,
-                description="Reflog history shows overwritten commits consistent with a force-push.",
-                affected_commits=shas[-2:],
+                severity=severity,
+                description="Reflog shows a non-fast-forward ref update consistent with rewritten history.",
+                affected_commits=[event.oldhexsha, event.newhexsha],
                 detected_at=datetime.now(timezone.utc),
-                forensic_details={"ref": head_ref, "reflog_entries": len(reflog_lines)},
-                geological_metaphor="Tilted strata were cut away and replaced by a newer flat layer.",
+                forensic_details={
+                    "ref": event.refname,
+                    "oldhexsha": event.oldhexsha,
+                    "newhexsha": event.newhexsha,
+                    "reflog_message": event.message,
+                    "fast_forward": False,
+                },
+                geological_metaphor="Older tilted strata were eroded away and replaced by a flatter sequence.",
             )
         )
     return events
