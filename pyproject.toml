@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "unconformity"
+version = "0.1.0"
+description = "Git forensics tool that analyzes what's MISSING from git history"
+requires-python = ">=3.9"
+dependencies = [
+    "click>=8.0",
+    "gitpython>=3.1",
+    "rich>=13.0",
+    "rich-click>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+]
+
+[project.scripts]
+unconformity = "unconformity.cli:cli"
+
+[tool.setuptools.packages.find]
+where = ["src"]
