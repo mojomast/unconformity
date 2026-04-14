@@ -1,18 +1,14 @@
-"""Squash merge detector.
+"""Squash-merge detector.
 
 Detects disconformities — single-parent commits that compressed multiple
-logical changes into one.  The classic signal is a ``git merge --squash``
-which produces a commit with only one parent even though the changes
-originated on a separate branch.
+logical changes into one, hiding the intermediary commit history.
 
-Detection strategy
-------------------
-1. Find unreachable commit tips (from ``git fsck``).
-2. For each unreachable tip, build the full unreachable chain.
-3. Check if the squash commit's tree matches the unreachable tip's tree
-   (strongest signal: ``git merge --squash`` preserves the tree).
-4. As a secondary signal, flag single-parent commits whose diff is
-   significantly larger than the branch average.
+Fix over v1:
+- Tree-match is now the PRIMARY gate (strong signal only).
+- File-count heuristic is demoted to a secondary, opt-in signal and
+  requires a much higher threshold to avoid false positives on normal
+  large commits.
+- Severity is now driven by hidden commit count, not just file count.
 """
 
 from __future__ import annotations
@@ -31,24 +27,38 @@ from ..git_forensics import (
 from ..models import Severity, UnconformityEvent, UnconformityType
 
 
-def _diff_stats(repo: Repo, parent_sha: str, commit_sha: str) -> int:
-    """Return number of files changed in a diff."""
+# Only use file-count as a secondary signal if changed files exceeds this.
+_FILE_COUNT_THRESHOLD = 15
+
+
+def _diff_file_count(repo: Repo, parent_sha: str, commit_sha: str) -> int:
+    """Return number of files changed between two commits."""
     try:
         output = repo.git.diff(
             parent_sha, commit_sha, "--numstat", "--no-ext-diff"
         )
-        return len([l for l in output.splitlines() if l.strip()])
+        return len([ln for ln in output.splitlines() if ln.strip()])
     except Exception:
         return 0
 
 
-def detect_disconformity(repo: Repo) -> List[UnconformityEvent]:
+def detect_disconformity(
+    repo: Repo,
+    use_file_heuristic: bool = False,
+) -> List[UnconformityEvent]:
+    """Detect squash merges.
+
+    Args:
+        repo: GitPython Repo object.
+        use_file_heuristic: If True, also flag single-parent commits with
+            unusually large diffs even without a tree-match confirmation.
+            Off by default to reduce false positives.
+    """
     events: List[UnconformityEvent] = []
     branch = default_branch_name(repo)
     if not branch:
         return events
 
-    # Gather unreachable commits for cross-referencing
     unreachable_shas = fsck_unreachable_commits(repo)
     if not unreachable_shas:
         return events
@@ -59,61 +69,71 @@ def detect_disconformity(repo: Repo) -> List[UnconformityEvent]:
         chain = collect_unreachable_chain(repo, tip, unreachable_shas)
         tip_chains[tip] = chain
 
-    # Build a set of unreachable commit trees for fast lookup
-    unreachable_trees: dict[str, str] = {}  # tree_hexsha -> tip_sha
+    # Build tree → tip map for fast O(1) lookup
+    unreachable_tree_to_tip: dict[str, str] = {}
     for tip, chain in tip_chains.items():
         try:
-            tip_commit = repo.commit(tip)
-            unreachable_trees[tip_commit.tree.hexsha] = tip
+            unreachable_tree_to_tip[repo.commit(tip).tree.hexsha] = tip
         except Exception:
             pass
 
-    # Check each single-parent commit on the main branch
     for commit in repo.iter_commits(branch, first_parent=True):
         if len(commit.parents) != 1:
             continue
         parent = commit.parents[0]
 
-        # Signal 1: Tree match — the squash commit has the same tree as
-        # an unreachable tip.  This is the strongest possible signal.
+        # --- Primary signal: tree match ---
         matched_chain: List[str] = []
-        if commit.tree.hexsha in unreachable_trees:
-            tip = unreachable_trees[commit.tree.hexsha]
+        if commit.tree.hexsha in unreachable_tree_to_tip:
+            tip = unreachable_tree_to_tip[commit.tree.hexsha]
             matched_chain = tip_chains.get(tip, [])
 
-        # Signal 2: The squash commit's diff is significantly larger
-        # than what a typical single commit would produce
-        files_changed = _diff_stats(repo, parent.hexsha, commit.hexsha)
-
-        if not matched_chain and files_changed < 4:
+        # --- Secondary signal: large diff (opt-in) ---
+        files_changed = 0
+        if not matched_chain and use_file_heuristic:
+            files_changed = _diff_file_count(repo, parent.hexsha, commit.hexsha)
+            if files_changed < _FILE_COUNT_THRESHOLD:
+                continue
+        elif not matched_chain:
+            # No tree match and heuristic disabled — skip
             continue
+        else:
+            files_changed = _diff_file_count(repo, parent.hexsha, commit.hexsha)
 
-        severity = Severity.MEDIUM
-        description = (
-            f"Single-parent commit with {files_changed} files changed."
-        )
+        hidden = len(matched_chain)
+        if hidden > 10:
+            severity = Severity.HIGH
+        elif hidden > 3:
+            severity = Severity.MEDIUM
+        else:
+            severity = Severity.LOW
+
+        desc = f"Squash merge detected: {files_changed} files changed."
         if matched_chain:
-            description += (
-                f" Unreachable chain of {len(matched_chain)} commits "
-                f"shares the same tree — likely a squash merge."
+            desc += (
+                f" Unreachable chain of {hidden} commit(s) shares the same "
+                f"tree — original branch history was compressed away."
             )
-            if len(matched_chain) > 5:
-                severity = Severity.HIGH
 
         events.append(
             UnconformityEvent(
                 type=UnconformityType.DISCONFORMITY,
                 severity=severity,
-                description=description,
-                affected_commits=[*matched_chain[-3:], commit.hexsha],
+                description=desc,
+                affected_commits=[*matched_chain[-5:], commit.hexsha],
                 detected_at=datetime.now(timezone.utc),
                 forensic_details={
-                    "message": commit.message.strip(),
+                    "squash_commit": commit.hexsha,
+                    "message": commit.message.strip()[:200],
                     "files_changed": files_changed,
-                    "hidden_commit_count": len(matched_chain),
+                    "hidden_commit_count": hidden,
                     "parent": parent.hexsha,
+                    "tree_match": bool(matched_chain),
                 },
-                geological_metaphor="Parallel strata were compressed into one preserved seam.",
+                geological_metaphor=(
+                    "Parallel strata were compressed into one preserved seam — "
+                    "the intermediary layers exist but were eroded from the main record."
+                ),
             )
         )
     return events

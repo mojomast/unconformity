@@ -1,4 +1,11 @@
-"""Force-push detector."""
+"""Force-push detector.
+
+Detects angular unconformities — non-fast-forward ref updates in the
+reflog that indicate history was overwritten via force-push.
+
+Fix over v1: scans ALL refs (not just the default branch) so force-pushes
+to feature/release/hotfix branches are caught too.
+"""
 
 from __future__ import annotations
 
@@ -7,44 +14,71 @@ from typing import List
 
 from git import Repo
 
-from ..git_forensics import default_branch_name, iter_reflog_events, is_ancestor
+from ..git_forensics import (
+    DEFAULT_BRANCH_NAMES,
+    default_branch_name,
+    is_ancestor,
+    iter_reflog_events,
+)
 from ..models import Severity, UnconformityEvent, UnconformityType
 
 
 def detect_angular(repo: Repo) -> List[UnconformityEvent]:
+    """Scan all reflog entries for non-fast-forward updates (force-pushes)."""
     events: List[UnconformityEvent] = []
-    branch = default_branch_name(repo)
-    branch_refs = [repo.head.reference] if not repo.head.is_detached else []
-    branch_refs.extend(repo.heads)
+    default_branch = default_branch_name(repo)
+    seen: set[tuple[str, str, str]] = set()
+
     for event in iter_reflog_events(repo):
-        if branch and not event.refname.endswith(f"/{branch}"):
+        old = event.oldhexsha
+        new = event.newhexsha
+
+        # Skip empty / initial-commit entries
+        if not old or not new:
             continue
-        if not event.oldhexsha or not event.newhexsha:
+        if old == "0" * 40 or new == "0" * 40:
             continue
-        if event.oldhexsha == event.newhexsha:
+        if old == new:
             continue
-        if is_ancestor(repo, event.oldhexsha, event.newhexsha):
+
+        # Fast-forward = new is a descendant of old → not a force-push
+        if is_ancestor(repo, old, new):
             continue
-        severity = (
-            Severity.CRITICAL
-            if branch in {"main", "master", "trunk"}
-            else Severity.HIGH
-        )
+
+        dedup_key = (event.refname, old, new)
+        if dedup_key in seen:
+            continue
+        seen.add(dedup_key)
+
+        # Determine severity: critical on protected/default branches
+        branch_short = event.refname.split("/")[-1]
+        is_default = (
+            default_branch and branch_short == default_branch
+        ) or branch_short in DEFAULT_BRANCH_NAMES
+        severity = Severity.CRITICAL if is_default else Severity.HIGH
+
         events.append(
             UnconformityEvent(
                 type=UnconformityType.ANGULAR,
                 severity=severity,
-                description="Reflog shows a non-fast-forward ref update consistent with rewritten history.",
-                affected_commits=[event.oldhexsha, event.newhexsha],
-                detected_at=datetime.now(timezone.utc),
+                description=(
+                    f"Force-push detected on '{event.refname}': "
+                    f"{old[:8]}…  was replaced by {new[:8]}…"
+                ),
+                affected_commits=[old, new],
+                detected_at=event.timestamp or datetime.now(timezone.utc),
                 forensic_details={
                     "ref": event.refname,
-                    "oldhexsha": event.oldhexsha,
-                    "newhexsha": event.newhexsha,
+                    "oldhexsha": old,
+                    "newhexsha": new,
                     "reflog_message": event.message,
                     "fast_forward": False,
+                    "is_default_branch": is_default,
                 },
-                geological_metaphor="Older tilted strata were eroded away and replaced by a flatter sequence.",
+                geological_metaphor=(
+                    "Older tilted strata were eroded and replaced by "
+                    "a flat new sequence — evidence of violent resurfacing."
+                ),
             )
         )
     return events

@@ -1,14 +1,16 @@
 """Rebase detector.
 
-Detects buttress unconformities — commits where history was rewritten via
-rebase.  The primary signal is a significant difference between author_date
-and committer_date, which git sets during rebase (the author date is
-preserved from the original commit, but the committer date becomes the
-rebase timestamp).
+Detects buttress unconformities — commits where history was rewritten
+via rebase, truncating the original commit chain.
 
-Secondary signals include reflog entries with "rebase" in the message,
-and commits reachable from reflog entries that are no longer reachable
-from any branch.
+Fix over v1:
+- Author/committer date delta threshold raised to 6h (21600s) to avoid
+  false positives from timezone differences and slow CI pipelines.
+- Reflog "rebase" signal is now checked FIRST and used as the primary
+  high-confidence signal; date-delta is secondary confirmation.
+- Deduplication is shared across both strategies.
+- Severity is now MEDIUM for reflog-confirmed rebases, LOW for
+  date-delta-only detections.
 """
 
 from __future__ import annotations
@@ -22,37 +24,87 @@ from ..git_forensics import default_branch_name, iter_reflog_events
 from ..models import Severity, UnconformityEvent, UnconformityType
 
 
-def detect_buttress(repo: Repo) -> List[UnconformityEvent]:
-    events: List[UnconformityEvent] = []
-    branch = default_branch_name(repo)
-    if not branch:
-        return events
+# Minimum author↔committer delta to consider a rebase signal.
+# 6 hours avoids false positives from timezone offsets and slow CI.
+_DATE_DELTA_THRESHOLD = 60 * 60 * 6  # 6 hours in seconds
 
+
+def detect_buttress(repo: Repo) -> List[UnconformityEvent]:
+    """Detect rebased history via reflog and author/committer date delta."""
+    events: List[UnconformityEvent] = []
     seen_shas: set[str] = set()
 
-    # Strategy 1: Check for author_date ≠ committer_date on single-parent commits
-    # A large delta is a strong rebase signal. Scan ALL branches, not just default.
+    # ------------------------------------------------------------------ #
+    # Strategy 1 (PRIMARY): Reflog entries explicitly mentioning rebase   #
+    # ------------------------------------------------------------------ #
+    reflog_rebase_olds: dict[str, str] = {}  # old_sha -> reflog message
+    for evt in iter_reflog_events(repo):
+        if "rebase" not in evt.message.lower():
+            continue
+        old = evt.oldhexsha
+        if not old or old == "0" * 40:
+            continue
+        reflog_rebase_olds[old] = evt.message
+
+    for old_sha, reflog_msg in reflog_rebase_olds.items():
+        if old_sha in seen_shas:
+            continue
+        # Confirm: is the pre-rebase SHA now unreachable from any branch?
+        try:
+            repo.commit(old_sha)  # still in object store?
+        except Exception:
+            continue
+        reachable = any(
+            _is_ancestor_safe(repo, old_sha, head.commit.hexsha)
+            for head in repo.heads
+        )
+        if reachable:
+            continue  # The old commit is still reachable — not a real rebase victim
+        seen_shas.add(old_sha)
+        events.append(
+            UnconformityEvent(
+                type=UnconformityType.BUTTRESS,
+                severity=Severity.MEDIUM,
+                description=(
+                    f"Reflog confirms rebase: pre-rebase commit {old_sha[:8]} "
+                    f"is no longer reachable from any branch."
+                ),
+                affected_commits=[old_sha],
+                detected_at=datetime.now(timezone.utc),
+                forensic_details={
+                    "pre_rebase_sha": old_sha,
+                    "reflog_message": reflog_msg,
+                    "signal": "reflog",
+                },
+                geological_metaphor=(
+                    "Older layers were truncated; fresh strata were deposited "
+                    "against the cut face, hiding the original sequence."
+                ),
+            )
+        )
+
+    # ------------------------------------------------------------------ #
+    # Strategy 2 (SECONDARY): Large author↔committer date delta           #
+    # ------------------------------------------------------------------ #
     for head in repo.heads:
         for commit in repo.iter_commits(head.name):
-            if len(commit.parents) != 1:
-                continue
             if commit.hexsha in seen_shas:
+                continue
+            if len(commit.parents) != 1:
                 continue
 
             delta = abs(commit.committed_date - commit.authored_date)
-            # Normal commits have delta ~0; rebases typically have delta > 1 hour
-            # We use 3600s as the threshold
-            if delta < 3600:
+            if delta < _DATE_DELTA_THRESHOLD:
                 continue
 
             seen_shas.add(commit.hexsha)
             events.append(
                 UnconformityEvent(
                     type=UnconformityType.BUTTRESS,
-                    severity=Severity.LOW if delta < 86400 else Severity.MEDIUM,
+                    severity=Severity.LOW,
                     description=(
-                        f"Commit has {delta/3600:.1f}h gap between author and committer dates, "
-                        f"suggesting rebased history."
+                        f"Commit {commit.hexsha[:8]} has a {delta/3600:.1f}h gap "
+                        f"between author and committer dates — possible rebase."
                     ),
                     affected_commits=[commit.hexsha],
                     detected_at=datetime.now(timezone.utc),
@@ -61,51 +113,22 @@ def detect_buttress(repo: Repo) -> List[UnconformityEvent]:
                         "committer_date": str(commit.committed_datetime),
                         "delta_seconds": delta,
                         "parent": commit.parents[0].hexsha,
-                        "message": commit.message.strip(),
+                        "message": commit.message.strip()[:200],
+                        "signal": "date_delta",
                     },
-                    geological_metaphor="Older layers were truncated and fresh strata were deposited against the cut face.",
-                )
-            )
-
-    # Strategy 2: Check reflog for rebase entries
-    # These directly indicate rebase operations
-    rebase_refs: dict[str, str] = {}  # old_sha -> message
-    for evt in iter_reflog_events(repo):
-        if "rebase" in evt.message.lower():
-            if evt.oldhexsha and evt.oldhexsha != "0" * 40:
-                rebase_refs[evt.oldhexsha] = evt.message
-
-    # Check if pre-rebase SHAs are now unreachable (confirming the rebase)
-    for old_sha in rebase_refs:
-        try:
-            # If the commit is reachable, no unconformity from this angle
-            repo.commit(old_sha)
-        except Exception:
-            continue
-        # Check if it's reachable from any branch
-        reachable = False
-        for head in repo.heads:
-            try:
-                repo.git.merge_base("--is-ancestor", old_sha, head.commit.hexsha)
-                reachable = True
-                break
-            except Exception:
-                continue
-        if not reachable and old_sha not in seen_shas:
-            seen_shas.add(old_sha)
-            events.append(
-                UnconformityEvent(
-                    type=UnconformityType.BUTTRESS,
-                    severity=Severity.MEDIUM,
-                    description=f"Reflog shows rebase: {rebase_refs[old_sha][:80]}",
-                    affected_commits=[old_sha],
-                    detected_at=datetime.now(timezone.utc),
-                    forensic_details={
-                        "reflog_message": rebase_refs[old_sha],
-                        "sha": old_sha,
-                    },
-                    geological_metaphor="Older layers were truncated and fresh strata were deposited against the cut face.",
+                    geological_metaphor=(
+                        "The rock record shows a discontinuity — the same material "
+                        "appears to have been deposited at two different times."
+                    ),
                 )
             )
 
     return events
+
+
+def _is_ancestor_safe(repo: Repo, older: str, newer: str) -> bool:
+    try:
+        repo.git.merge_base("--is-ancestor", older, newer)
+        return True
+    except Exception:
+        return False
