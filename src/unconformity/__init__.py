@@ -1,4 +1,7 @@
-"""Unconformity git forensics toolkit."""
+"""disconformitussy — Git forensics for what's MISSING.
+
+Part of the ussyverse: https://github.com/mojomast
+"""
 
 __all__ = ["__version__"]
 

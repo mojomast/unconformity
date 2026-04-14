@@ -1,14 +1,17 @@
-# 🕳️ unconformity
+# 🪨 disconformitussy
 
-> **Git forensics for what's MISSING.**
+> **Git forensics for what's MISSING — ussyverse edition.**
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)]()
+[![ussyverse](https://img.shields.io/badge/ussyverse-%F0%9F%AA%A8-purple)](https://github.com/mojomast)
 
-Every git tool shows what **exists**. `unconformity` shows what's **missing** — the gaps, deletions, overwrites, and erasures hiding in your repository's history.
+Part of the **[ussyverse](https://github.com/mojomast)** — the mojomast ecosystem of unhinged, useful software.
 
-Named after the geological phenomenon where missing rock layers reveal lost time, `unconformity` maps five classes of git history anomalies to their geological equivalents — giving you a forensic vocabulary for what your repo _isn't_ telling you.
+Every git tool shows what **exists**. `disconformitussy` shows what's **missing** — the gaps, deletions, overwrites, and erasures hiding in your repository's history.
+
+Named after the geological phenomenon where missing rock layers reveal lost time, `disconformitussy` maps five classes of git history anomalies to their geological equivalents — giving you a forensic vocabulary for what your repo _isn't_ telling you.
 
 ---
 
@@ -16,7 +19,7 @@ Named after the geological phenomenon where missing rock layers reveal lost time
 
 Force-pushes erase history. Squash merges bury individual commits. Rebases silently rewrite SHA chains. Deleted branches vanish with all their work. Time gaps hint at abandoned efforts or context switches that never came back.
 
-Standard git tools show you the surface. `unconformity` digs for the strata underneath.
+Standard git tools show you the surface. `disconformitussy` digs for the strata underneath.
 
 ---
 
@@ -35,19 +38,21 @@ Standard git tools show you the surface. `unconformity` digs for the strata unde
 ## Quick Start
 
 ```bash
+git clone https://github.com/mojomast/unconformity
+cd unconformity
 pip install -e .
 
 # Scan a repo for all missing history events
-unconformity scan /path/to/repo
+disconformitussy scan /path/to/repo
 
 # Generate a full forensic report (markdown, html, json, text)
-unconformity report /path/to/repo --format markdown
+disconformitussy report /path/to/repo --format markdown
 
 # Visualize history as geological layers in your terminal
-unconformity timeline /path/to/repo
+disconformitussy timeline /path/to/repo
 
 # Watch a repo live and alert on new anomalies
-unconformity watch /path/to/repo --webhook https://hooks.example.com/alert
+disconformitussy watch /path/to/repo --webhook https://hooks.example.com/alert
 ```
 
 ---
@@ -56,15 +61,15 @@ unconformity watch /path/to/repo --webhook https://hooks.example.com/alert
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│  unconformity scan — /home/user/myproject                            │
-├────────────────────┬──────────┬────────────────────────────────────┤
-│  Type              │ Severity │ Description                        │
-├────────────────────┼──────────┼────────────────────────────────────┤
-│  🔴 Angular        │ CRITICAL │ Force-push to main (3 SHAs lost)   │
-│  🟠 Disconformity  │ MEDIUM   │ Squash merge on PR #47 (6 commits) │
-│  🔵 Buttress       │ MEDIUM   │ Rebase detected on feature/auth    │
-│  ⚪ Paraconformity │ LOW      │ 18-day gap between commits         │
-└────────────────────┴──────────┴────────────────────────────────────┘
+│  disconformitussy scan — /home/user/myproject                        │
+├────────────────────┬──────────┬──────────────────────────────────────┤
+│  Type              │ Severity │ Description                          │
+├────────────────────┼──────────┼──────────────────────────────────────┤
+│  🔴 Angular        │ CRITICAL │ Force-push to main (3 SHAs lost)     │
+│  🟠 Disconformity  │ MEDIUM   │ Squash merge on PR #47 (6 commits)   │
+│  🔵 Buttress       │ MEDIUM   │ Rebase detected on feature/auth      │
+│  ⚪ Paraconformity │ LOW      │ 18d 4h gap between commits           │
+└────────────────────┴──────────┴──────────────────────────────────────┘
 
 Risk Score: 61 / 100
 ```
@@ -75,7 +80,7 @@ Risk Score: 61 / 100
 
 ### `scan`
 ```
-unconformity scan <repo-path> [OPTIONS]
+disconformitussy scan <repo-path> [OPTIONS]
 ```
 | Flag | Description |
 |------|-------------|
@@ -89,7 +94,7 @@ unconformity scan <repo-path> [OPTIONS]
 
 ### `report`
 ```
-unconformity report <repo-path> [OPTIONS]
+disconformitussy report <repo-path> [OPTIONS]
 ```
 Generates a full report with executive summary, per-finding details, risk score (0–100), and recommendations.
 
@@ -101,7 +106,7 @@ Generates a full report with executive summary, per-finding details, risk score 
 
 ### `timeline`
 ```
-unconformity timeline <repo-path> [OPTIONS]
+disconformitussy timeline <repo-path> [OPTIONS]
 ```
 Renders a color-coded geological layer view of your commit history in the terminal. Unconformity events appear as gaps, intrusions, and truncations.
 
@@ -113,7 +118,7 @@ Renders a color-coded geological layer view of your commit history in the termin
 
 ### `watch`
 ```
-unconformity watch <repo-path> [OPTIONS]
+disconformitussy watch <repo-path> [OPTIONS]
 ```
 Polls the repo on an interval and fires alerts when new unconformities are detected. Webhook support for Slack, Discord, or any HTTP endpoint.
 
@@ -155,6 +160,17 @@ src/unconformity/
 - **Team health** — Detect rebase-heavy workflows erasing collaborative commit context
 - **Compliance** — Demonstrate history integrity for regulated codebases
 - **OSS due diligence** — Before depending on a project, check if history has been manipulated
+- **Ussyverse integration** — Wire into your agent pipelines to auto-audit repos on push
+
+---
+
+## Ussyverse
+
+`disconformitussy` is part of the [ussyverse](https://github.com/mojomast) — a collection of open-source tools built by [@mojomast](https://github.com/mojomast). Check out the rest of the ecosystem:
+
+- **[devussy](https://github.com/mojomast/devussy)** — AI dev orchestration
+- **[ragussy](https://github.com/mojomast/ragussy)** — Local RAG + LLM inference stack
+- **[openclawssy](https://github.com/mojomast/openclawssy)** — Agent collaboration on GitHub
 
 ---
 
@@ -174,10 +190,11 @@ Tests use real temporary git repositories that simulate each unconformity type �
 ## Roadmap
 
 - [ ] GitHub Actions integration (scan on push / PR)
-- [ ] `unconformity diff <before-sha> <after-sha>` for targeted comparison
+- [ ] `disconformitussy diff <before-sha> <after-sha>` for targeted comparison
 - [ ] HTML report with interactive timeline
 - [ ] GitLab / Gitea support
-- [ ] PyPI release
+- [ ] PyPI release as `disconformitussy`
+- [ ] Ussyverse dashboard integration
 
 ---
 

@@ -3,9 +3,9 @@ requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "unconformity"
+name = "disconformitussy"
 version = "0.1.0"
-description = "Git forensics tool that analyzes what's MISSING from git history"
+description = "Git forensics for what's MISSING — ussyverse edition"
 requires-python = ">=3.9"
 dependencies = [
     "click>=8.0",
@@ -21,7 +21,7 @@ dev = [
 ]
 
 [project.scripts]
-unconformity = "unconformity.cli:cli"
+disconformitussy = "unconformity.cli:cli"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -1,12 +1,14 @@
-# Unconformity — Git Forensics for What's Missing
+# disconformitussy — Git Forensics for What's Missing
+
+> Part of the **[ussyverse](https://github.com/mojomast)** ecosystem.
 
 ## Vision
 
-Every git tool shows what EXISTS. Unconformity shows what's MISSING — the gaps, deletions, overwrites, and absences in git history. It maps geological unconformity types to git events, providing a unique forensic perspective on repository health.
+Every git tool shows what EXISTS. `disconformitussy` shows what's MISSING — the gaps, deletions, overwrites, and absences in git history. It maps geological unconformity types to git events, providing a unique forensic perspective on repository health.
 
 ## Core Concept
 
-In geology, an **unconformity** is a missing layer in the rock record — evidence that something was erased, compressed, or never deposited. The same patterns exist in git repositories. Unconformity detects and classifies these missing layers.
+In geology, an **unconformity** is a missing layer in the rock record — evidence that something was erased, compressed, or never deposited. The same patterns exist in git repositories. `disconformitussy` detects and classifies these missing layers.
 
 ## Unconformity Type Mappings
 
@@ -15,51 +17,47 @@ In geology, an **unconformity** is a missing layer in the rock record — eviden
 **Git**: Force-pushes that overwrite history. The old commit chain is "tilted" (divergent), and the new chain is "flat" (replacing it). Detected via reflog entries showing missing SHAs and dangling objects.
 
 **Detection**:
-- Check reflog for entries where a ref now points to a different SHA than its previous entry
-- Find dangling commits (objects not reachable from any current ref)
-- Compare reflog chains for sudden SHA changes in the same ref
-- Severity: High (history is literally being overwritten)
+- Scan ALL refs in reflog (not just default branch)
+- Check for non-fast-forward ref updates (old SHA is not an ancestor of new SHA)
+- Severity: CRITICAL on main/master/trunk, HIGH on all other branches
 
 ### 2. Disconformity — Squash Merges
 **Geology**: Parallel rock layers with a missing intermediary layer, indicating a gap in deposition.
 **Git**: Squash merges that compress parallel work (multiple commits on a branch) into a single commit on the target branch. The intermediary commits are "eroded away" — they exist in the repo but not in the main history chain.
 
 **Detection**:
-- Find merge commits (or their aftermath) where the resulting commit has only one parent but was created via `--squash`
-- Detect commits that combine changes from multiple authors (co-authored-by trailers or file-level blame analysis)
-- Find dangling commit trees where commits share a common base with a branch tip but aren't reachable from any ref
-- Severity: Medium (information is preserved but hidden)
+- Primary signal: single-parent commit whose tree SHA matches an unreachable commit tip (tree match = definitive squash proof)
+- Secondary signal (opt-in): single-parent commit with unusually large diff (>15 files changed)
+- Severity driven by hidden commit count: LOW <4, MEDIUM 4–10, HIGH >10
 
 ### 3. Nonconformity — Deleted Branches
 **Geology**: Igneous intrusion that was eroded away, leaving only the surrounding sedimentary rock.
 **Git**: Deleted branches that never merged. The branch existed (leaving dangling commits) but was removed without merging — the work simply vanished.
 
 **Detection**:
-- Find dangling commit trees not reachable from any ref (branches, tags)
-- Use `git fsck --unreachable` to identify orphaned commits
-- Cross-reference with reflog to find deleted branch tips
-- Severity: Variable (could be intentional cleanup or lost work)
+- Find dangling commit trees not reachable from any ref (via `git fsck --unreachable`)
+- Cross-reference reflog to recover the deleted branch name
+- Attach earliest/latest commit timestamps to forensic details
+- Severity: LOW <4 commits, MEDIUM 4–10, HIGH >10
 
 ### 4. Paraconformity — Time Gaps
 **Geology**: Apparent continuity between rock layers but missing time — the layers look conformable but represent a significant time gap.
-**Git**: Time gaps between commits. The commit chain looks continuous but has significant temporal gaps (weekends don't count, but multi-week gaps do).
+**Git**: Time gaps between commits. The commit chain looks continuous but has significant temporal gaps.
 
 **Detection**:
-- Compute commit timestamp deltas between consecutive commits on each branch
-- Flag statistical outliers (gaps > 2 standard deviations from mean, or > configurable threshold)
-- Account for business hours (configurable: skip weekends, set working hours)
-- Severity: Low-Medium (may indicate stalled work, context switching, or abandoned efforts)
+- Compute business-time gap (excludes weekends) between consecutive commits
+- Flag if gap >= threshold (default: 14 days) OR statistical outlier (>2σ above mean)
+- Configurable: `max_commits`, `gap_threshold_seconds`, `zscore_threshold`
+- Severity: LOW < 28 days, MEDIUM >= 28 days
 
 ### 5. Buttress Unconformity — Rebases
 **Geology**: Younger rock layers deposited against older truncated layers, where the older layers were cut off.
 **Git**: Rebases that rewrite history. The original commits are "truncated" (their SHAs change), and new commits are deposited against the new base.
 
 **Detection**:
-- Detect commit chains with same author/message patterns but different SHAs
-- Find commits in reflog that share patch content but not SHA
-- Identify commits where the parent chain differs from what timestamps suggest
-- Look for author date ≠ committer date patterns (common in rebases)
-- Severity: Medium (history is rewritten but work is preserved)
+- Primary signal: reflog entries with "rebase" in the message where pre-rebase SHA is now unreachable
+- Secondary signal: commits with author_date ↔ committer_date delta > 6h
+- Severity: MEDIUM for reflog-confirmed, LOW for date-delta-only
 
 ## Technical Stack
 
@@ -74,23 +72,23 @@ In geology, an **unconformity** is a missing layer in the rock record — eviden
 ## Project Structure
 
 ```
-Unconformity/
+disconformitussy/
 ├── SPEC.md
 ├── README.md
 ├── pyproject.toml
 ├── src/
 │   └── unconformity/
 │       ├── __init__.py
-│       ├── cli.py              # Click CLI entry point
+│       ├── cli.py              # Click CLI entry point (command: disconformitussy)
 │       ├── scanner.py          # Core scanning engine
 │       ├── detectors/
-│       │   ├── __init__.py
+│       │   ├── __init__.py     # detect_all() convenience function
 │       │   ├── angular.py      # Force-push detection
 │       │   ├── disconformity.py # Squash merge detection
 │       │   ├── nonconformity.py # Deleted branch detection
 │       │   ├── paraconformity.py # Time gap detection
 │       │   └── buttress.py     # Rebase detection
-│       ├── models.py           # Data models (Unconformity, Severity, etc.)
+│       ├── models.py           # Data models (UnconformityEvent, Severity, etc.)
 │       ├── reporter.py         # Report generation
 │       ├── timeline.py         # Timeline visualization
 │       ├── watcher.py          # Real-time monitoring
@@ -111,55 +109,27 @@ Unconformity/
 
 ## CLI Commands
 
-### `unconformity scan <repo-path>`
+### `disconformitussy scan <repo-path>`
 Scan a git repository and classify all unconformities.
 
-Options:
-- `--types / -t`: Filter by unconformity types (angular, disconformity, nonconformity, paraconformity, buttress)
-- `--severity / -s`: Minimum severity threshold (low, medium, high, critical)
-- `--since / -S`: Only scan commits since this date/time
-- `--until / -U`: Only scan commits until this date/time
-- `--branch / -b`: Only scan specific branch
-- `--json`: Output as JSON for piping
-- `--verbose / -v`: Show detailed forensic information
+Options: `--types`, `--severity`, `--since`, `--until`, `--branch`, `--json`, `--verbose`
 
 Output: Rich table with columns: Type, Severity, Description, Affected Commits, Detected At
 
-### `unconformity report <repo-path>`
+### `disconformitussy report <repo-path>`
 Generate a detailed report with severity scores and analysis.
 
-Options:
-- `--output / -o`: Output file path (default: stdout)
-- `--format / -f`: Report format (text, markdown, html, json)
-- `--threshold / -t`: Minimum severity to include
+Options: `--output`, `--format` (text/markdown/html/json), `--threshold`
 
-Output: Full report with:
-- Executive summary (total unconformities by type, severity distribution)
-- Detailed findings per unconformity
-- Risk score (0-100) based on unconformity count and severity
-- Recommendations
+### `disconformitussy timeline <repo-path>`
+Visualize the geological layers of git history in the terminal.
 
-### `unconformity timeline <repo-path>`
-Visualize the geological layers of git history.
+Options: `--width`, `--branch`, `--color`
 
-Options:
-- `--width / -w`: Timeline width in characters (default: terminal width)
-- `--branch / -b`: Branch to visualize
-- `--color / -c`: Color mode (auto, always, never)
-
-Output: Vertical timeline with:
-- Commits as geological layers (colored by type)
-- Unconformities marked as gaps/intrusions
-- Legend mapping colors to unconformity types
-
-### `unconformity watch <repo-path>`
+### `disconformitussy watch <repo-path>`
 Monitor a repository for new unconformities in real-time.
 
-Options:
-- `--interval / -i`: Polling interval in seconds (default: 30)
-- `--webhook / -w`: Webhook URL to POST new unconformities to
-
-Output: Live updating display showing new unconformities as they're detected.
+Options: `--interval`, `--webhook`
 
 ## Data Models
 
@@ -187,10 +157,10 @@ class UnconformityEvent:
     type: UnconformityType
     severity: Severity
     description: str
-    affected_commits: List[str]    # List of SHAs
+    affected_commits: List[str]
     detected_at: datetime
-    forensic_details: dict         # Type-specific details
-    geological_metaphor: str       # Human-readable geological explanation
+    forensic_details: dict
+    geological_metaphor: str
 
 @dataclass
 class ScanResult:
@@ -203,63 +173,32 @@ class ScanResult:
 
 ## Severity Scoring
 
-- **Critical**: Force-pushes to main/master branch
-- **High**: Force-pushes to other branches; deleted branches with >5 commits
-- **Medium**: Squash merges; rebases; deleted branches with 1-5 commits
-- **Low**: Time gaps; small rebases
+- **Critical**: Force-pushes to main/master/trunk
+- **High**: Force-pushes to other branches; deleted branches with >10 commits
+- **Medium**: Squash merges (>3 hidden commits); rebases (reflog-confirmed); deleted branches 4–10 commits
+- **Low**: Time gaps; small rebases (date-delta only); small orphaned chains (<4 commits)
+
+## Ussyverse Integration
+
+`disconformitussy` is designed to plug into the ussyverse agent ecosystem:
+
+- **Webhook output** from `watch` can pipe into ussybot or any Discord/Slack channel
+- **JSON output** from `scan --json` is consumable by openclawssy agents for automated repo auditing
+- **Report generation** can be triggered by CI/CD pipelines on push events
 
 ## Implementation Notes
 
-1. **GitPython Usage**: Use `git.Repo` for all git operations. Access reflog via `repo.git.reflog()`, dangling objects via `repo.git.fsck()`, and commit history via `repo.iter_commits()`.
-
-2. **Performance**: For large repos, use generators and lazy evaluation. Don't load all commits into memory at once. Consider caching.
-
+1. **GitPython Usage**: Use `git.Repo` for all git operations. Access reflog via `ref.log()`, dangling objects via `repo.git.fsck()`, commit history via `repo.iter_commits()`.
+2. **Performance**: Use generators and lazy evaluation for large repos. `paraconformity` and `buttress` detectors accept `max_commits` to bound scan time.
 3. **Error Handling**: Gracefully handle non-git directories, bare repos, shallow clones, and repos with no history.
-
-4. **Test Fixtures**: Create temporary git repositories in conftest.py that simulate each unconformity type (force-push history, squash merges, deleted branches, etc.).
-
-5. **Watch Command**: Use polling (not filesystem events) for simplicity. Compare reflog state between polls.
-
-6. **Color Palette**: Define in palette.py as Rich Color objects. Sediment browns for normal history, igneous reds for destructive events, metamorphic blues for transformations, time whites for gaps.
-
-## pyproject.toml Configuration
-
-```toml
-[build-system]
-requires = ["setuptools>=64", "wheel"]
-build-backend = "setuptools.backends._legacy:_Backend"
-
-[project]
-name = "unconformity"
-version = "0.1.0"
-description = "Git forensics tool that analyzes what's MISSING from git history"
-requires-python = ">=3.9"
-dependencies = [
-    "click>=8.0",
-    "gitpython>=3.1",
-    "rich>=13.0",
-    "rich-click>=1.0",
-]
-
-[project.optional-dependencies]
-dev = [
-    "pytest>=7.0",
-    "pytest-cov",
-]
-
-[project.scripts]
-unconformity = "unconformity.cli:cli"
-
-[tool.setuptools.packages.find]
-where = ["src"]
-```
+4. **`detect_all()`**: The `detectors/__init__.py` exports a `detect_all(repo)` function that runs all detectors, swallows individual exceptions, and returns severity-sorted results.
+5. **Test Fixtures**: Create temporary git repos in `conftest.py` simulating each unconformity type.
 
 ## Success Criteria
 
-1. `pip install -e .` works and installs the `unconformity` command
-2. `unconformity scan <any-git-repo>` detects and classifies unconformities
-3. `unconformity report <any-git-repo>` generates a formatted report
-4. `unconformity timeline <any-git-repo>` shows a visual timeline
+1. `pip install -e .` installs the `disconformitussy` command
+2. `disconformitussy scan <any-git-repo>` detects and classifies unconformities
+3. `disconformitussy report <any-git-repo>` generates a formatted report
+4. `disconformitussy timeline <any-git-repo>` shows a visual timeline
 5. All detector modules have corresponding tests
-6. Test repos properly simulate each unconformity type
-7. Output uses the geological color palette consistently
+6. Output uses the geological color palette consistently
